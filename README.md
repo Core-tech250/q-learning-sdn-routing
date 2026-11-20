@@ -94,7 +94,3 @@ real Mininet testbed. No Deep Q-Learning was implemented.
 - **In the Mininet VM:** start the Ryu controller, then `sudo python3 topology.py`
   — see `SETUP_GUIDE.md` for the complete procedure.
 
-## Author
-
-**Nishant Goel** — B.Tech CSE (Semester 5), Vivekananda Institute of
-Professional Studies (VIPS), GGSIPU. Computer Networks course project, 2026.
