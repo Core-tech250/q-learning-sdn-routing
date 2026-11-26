@@ -109,6 +109,14 @@ the tabular policy's. Outputs: `dqn_training_log.csv` (per-episode log),
 `dqn_model.npz` (trained weights, generated locally by the training run) and
 `dqn_learning_curve.png` (generated locally by the training run).
 
+**Live validation driver:** `train_dqn.py --live` loads the trained weights
+(frozen, ε = 0) inside the Mininet VM and lets the network itself choose the
+path for the h1 → h2 flow, under the same measurement protocol as the tabular
+validation — e.g. `python3 train_dqn.py --live --level 8 --episodes 5`. The
+network was also queried at the testbed's actual background rates
+(0 / 4.2 / 8.4 Mbps) and gives the same policy there. The live runs themselves
+are the remaining step; until they are recorded, the scope note above stands.
+
 ## Method note (stated honestly)
 
 The Q-table was **trained in simulation** (90 episodes on Windows, on a model
@@ -124,7 +132,7 @@ simulation only (300 episodes) and was not validated live.
 | `q_agent.py` | Tabular Q-Learning agent + reward function |
 | `train_agent.py` | Training driver — simulation mode and `--live` mode |
 | `dqn_agent.py` | Deep Q-Network agent — NumPy MLP, experience replay, target network |
-| `train_dqn.py` | DQN training driver — 300 simulation episodes; writes the log, weights and learning curve |
+| `train_dqn.py` | DQN driver — simulation training (log, weights, learning curve); `--live` mode runs the frozen policy on the testbed |
 | `dqn_training_log.csv` | DQN per-episode training log (300 episodes, seed 42) |
 | `topology.py` | Mininet diamond topology (runs in the VM) |
 | `controller_q.py` | Ryu controller — fixed next-hop flows + agent action for h1→h2 |
@@ -139,4 +147,6 @@ simulation only (300 episodes) and was not validated live.
   `py train_dqn.py` (Deep Q-Learning extension) ·
   `py plot_results.py` (graphs from `results.csv`)
 - **In the Mininet VM:** start the Ryu controller, then `sudo python3 topology.py`
-  — see `SETUP_GUIDE.md` for the complete procedure.
+  — see `SETUP_GUIDE.md` for the complete procedure. For the DQN live
+  validation: `python3 train_dqn.py --live --level 8 --episodes 5`
+  (needs `numpy` and `dqn_model.npz` in the VM's project folder).

@@ -1,36 +1,41 @@
 """
-train_dqn.py - Train the Deep Q-Learning (DQN) agent in simulation.
+train_dqn.py - Train / run the Deep Q-Learning (DQN) agent.
 
-Extension of the tabular project (train_agent.py). The DQN agent from
-dqn_agent.py is trained in EXACTLY the same built-in network model as
-the tabular agent - same simulated_measurement(), same reward function,
-same Low/Medium/High episode cycle - so the two agents can be compared
-fairly on identical conditions.
+Extension of the tabular project (train_agent.py). Two modes:
 
-    python train_dqn.py                 (300 episodes, reproducible)
-    python train_dqn.py --episodes 500
+1) SIMULATION (default, run anywhere):
+       python train_dqn.py
+   Trains the DQN from dqn_agent.py in EXACTLY the same built-in
+   network model as the tabular agent - same simulated_measurement(),
+   same reward function, same Low/Medium/High episode cycle - so the
+   two agents can be compared fairly on identical conditions.
+   Outputs: dqn_training_log.csv, dqn_model.npz, dqn_learning_curve.png
 
-Outputs:
-    dqn_training_log.csv   - one row per episode (incl. training loss)
-    dqn_model.npz          - the trained network weights
-    dqn_learning_curve.png - reward per episode with moving average
-
-IMPORTANT (honesty note, same as the rest of this project): the DQN is
-trained and evaluated in SIMULATION only. The live Mininet testbed
-validation in results.csv was performed with the tabular agent's
-learned policy. The DQN is the scalability extension - it shows the
-same routing policy being learned by a neural network, which is the
-version that would scale to a large topology where a Q-table cannot.
+2) LIVE VALIDATION (run inside the Mininet VM, next to controller_q.py):
+       python3 train_dqn.py --live --episodes 15
+   Loads the trained network (dqn_model.npz) with its weights FROZEN
+   and epsilon = 0 - the network itself, not a table, now picks the
+   path for the h1 -> h2 flow. For each episode the driver:
+     a. shows the congestion level to set and the network's Q-values,
+     b. writes the network's chosen action to current_action.txt
+        (the Ryu controller reads this file),
+     c. WAITS while you run the background iperf + main iperf + ping
+        in the Mininet CLI (same measurement protocol as Part E),
+     d. asks you for the 3 numbers and logs them to dqn_live_log.csv.
+   This is the same validation standard the tabular policy was held
+   to in Part E: a learned policy, frozen, measured on the real
+   testbed. The network is NOT re-trained on live data.
 """
 
 import argparse
 import csv
 import random
+import sys
 
 import numpy as np
 
 from q_agent import STATES, ACTIONS, compute_reward, simulated_measurement
-from train_agent import BACKGROUND_LEVELS
+from train_agent import BACKGROUND_LEVELS, ask_float
 from dqn_agent import DQNAgent
 
 UPDATES_PER_EPISODE = 4  # gradient steps per episode (replay makes this cheap)
@@ -127,8 +132,83 @@ def run(episodes):
           "dqn_learning_curve.png")
 
 
+# Part E testbed levels -> (state, actual background rate on Path 1).
+# The network is fed the ACTUAL rate, not the nominal training level -
+# it must generalise, and it does (verified: same policy at 0/4.2/8.4).
+LIVE_LEVELS = {0: (0, 0.0), 4: (1, 4.2), 8: (2, 8.4)}
+
+
+def run_live(episodes, level=None):
+    """Validate the frozen DQN policy on the real Mininet testbed.
+
+    Block mode (--level 0/4/8) runs every episode at one Part E level,
+    which is how the testbed sessions work: one topology start per
+    action, 5 runs per level. Without --level, episodes cycle
+    Low/Medium/High at the nominal training rates.
+    """
+    agent = DQNAgent()
+    try:
+        agent.load("dqn_model.npz")
+    except Exception:
+        print("dqn_model.npz not found - train first with: "
+              "python3 train_dqn.py")
+        sys.exit(1)
+    agent.epsilon = 0.0  # validation: always the network's greedy choice
+    print("Loaded dqn_model.npz - weights frozen, epsilon = 0.")
+    print("The network itself now picks the path each episode.\n")
+    rewards = []
+    with open("dqn_live_log.csv", "a", newline="") as f:
+        log = csv.writer(f)
+        for ep in range(1, episodes + 1):
+            if level is not None:
+                state, bg = LIVE_LEVELS[level]
+            else:
+                state = (ep - 1) % 3
+                bg = BACKGROUND_LEVELS[state]
+            s_vec = state_vector(state, bg)
+            q = agent.q_values(s_vec)
+            action = int(np.argmax(q))
+            with open("current_action.txt", "w") as af:
+                af.write(str(action))
+            print(f"\n--- Episode {ep}/{episodes} ---")
+            if bg > 0:
+                print(f"State: {STATES[state]}  (set background h3->h4 "
+                      f"to about {bg} Mbps)")
+            else:
+                print(f"State: {STATES[state]}  (no background traffic)")
+            print(f"Network Q-values: Path 1 = {q[0]:.3f}, "
+                  f"Path 2 = {q[1]:.3f}")
+            print(f"DQN chose: {ACTIONS[action]}  "
+                  f"(written to current_action.txt)")
+            input("Run the background + iperf + ping commands, "
+                  "then press Enter here...")
+            tput = ask_float("  iperf throughput h1->h2 (Mbps): ")
+            delay = ask_float("  ping average delay (ms): ")
+            loss = ask_float("  ping packet loss (%): ")
+            reward = compute_reward(tput, delay, loss)
+            rewards.append(reward)
+            log.writerow([ep, STATES[state], ACTIONS[action],
+                          tput, delay, loss, f"{reward:.3f}"])
+            f.flush()
+            print(f"  reward = {reward:.2f}")
+    print("\nLive validation session done. Rows appended to "
+          "dqn_live_log.csv")
+    print("Reminder: the policy that ran was the network's own - "
+          "Low -> Path 1, Medium/High -> Path 2 (check the log).")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--live", action="store_true",
+                        help="validate the trained DQN on the Mininet "
+                             "testbed (weights frozen)")
     parser.add_argument("--episodes", type=int, default=300)
+    parser.add_argument("--level", type=int, choices=[0, 4, 8],
+                        default=None,
+                        help="live mode only: run all episodes at one "
+                             "Part E level (0, 4 or 8)")
     args = parser.parse_args()
-    run(args.episodes)
+    if args.live:
+        run_live(args.episodes, level=args.level)
+    else:
+        run(args.episodes)
