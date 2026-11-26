@@ -4,7 +4,8 @@ Can a central SDN controller **learn** — by trial and error — when to shift 
 away from the shortest path? This project answers that with a working testbed:
 a tabular Q-Learning agent that routes traffic in a Mininet network controlled
 by a Ryu SDN controller, compared head-to-head against fixed shortest-path routing
-over 30 real measurements.
+over 30 real measurements. A **Deep Q-Learning (DQN) extension** then replaces the
+Q-table with a neural network and learns the same policy in simulation.
 
 ## The problem
 
@@ -36,10 +37,12 @@ policy does better.
 | **Discount γ** | 0.9 |
 | **Exploration ε** | 1.0, decaying ×0.95 per episode (min 0.05) |
 
-A Q-table is used instead of a Deep Q-Network because the state space is only
-3 states × 2 actions — a neural network would add cost with no benefit at this
-scale. (The project is based on the core Q-Learning principle of the review
-paper *"AI-driven routing in SDN using deep Q-learning"*.)
+A Q-table is used for the measured experiment because the state space is only
+3 states × 2 actions — a table represents the Q-function exactly and can be
+inspected entry by entry. (The project is based on the core Q-Learning principle
+of the review paper *"AI-driven routing in SDN using deep Q-learning"*.) The
+Deep Q-Learning extension below exists for the scale case, where a table would
+no longer work.
 
 ## What the agent learned
 
@@ -67,12 +70,52 @@ collapse entirely: **throughput ×2.8, delay ÷14, loss 1% → 0%**. The honest
 trade-off is at Level 4: +33% throughput is bought with higher delay, because
 Path 2's links are longer.
 
+## Deep Q-Learning extension
+
+`dqn_agent.py` replaces the Q-table with a small neural network that
+*approximates* the Q-function — the version of the method that scales to large
+topologies, where a table cannot. It is a genuine DQN, written in pure NumPy
+(hand-written forward/backward passes, no deep-learning framework):
+
+- **Network:** 4 → 32 → 32 → 2 multilayer perceptron (1,282 parameters).
+  Input = one-hot congestion state + the continuous background rate, so the
+  network learns a smooth Q-function over congestion instead of three
+  memorised rows.
+- **Experience replay:** 2,000-transition buffer, random mini-batches of 32,
+  4 gradient steps per episode.
+- **Target network:** separate copy, synchronised every 100 gradient steps.
+- **Optimiser:** Adam, learning rate 0.001. Same reward, γ = 0.9 and
+  ε-greedy schedule as the tabular agent.
+
+Trained for **300 episodes in exactly the same simulation model** as the
+tabular agent (`python train_dqn.py`, seed 42 — fully reproducible), it learned
+**the same policy**:
+
+| Path 1 congestion | DQN Q – Path 1 | DQN Q – Path 2 | DQN policy |
+|---|---|---|---|
+| Low | **59.757** | 57.677 | Path 1 |
+| Medium | 43.589 | **48.073** | Path 2 |
+| High | 30.213 | **47.523** | Path 2 |
+
+Average episode reward rose from **4.62** (first 30 episodes) to **7.21**
+(last 30). The DQN's Q-value *magnitudes* are not comparable with the table's —
+replay and bootstrapping put them on a different scale; only the ordering
+(the policy) carries meaning. Note the narrow Low margin: shared weights pull
+the Path 2 value at Low upward — generalisation made visible.
+
+**Scope, stated honestly:** the DQN was trained and evaluated in **simulation
+only** and was not deployed in the Mininet testbed. The live results above are
+the tabular policy's. Outputs: `dqn_training_log.csv` (per-episode log),
+`dqn_model.npz` (trained weights, generated locally by the training run) and
+`dqn_learning_curve.png` (generated locally by the training run).
+
 ## Method note (stated honestly)
 
 The Q-table was **trained in simulation** (90 episodes on Windows, on a model
 parameterised from the testbed and the measured baseline, after 2 pilot live
 episodes) and the learned policy was then **validated with 15 live runs** on the
-real Mininet testbed. No Deep Q-Learning was implemented.
+real Mininet testbed. The Deep Q-Learning extension was likewise trained in
+simulation only (300 episodes) and was not validated live.
 
 ## Files
 
@@ -80,6 +123,9 @@ real Mininet testbed. No Deep Q-Learning was implemented.
 |---|---|
 | `q_agent.py` | Tabular Q-Learning agent + reward function |
 | `train_agent.py` | Training driver — simulation mode and `--live` mode |
+| `dqn_agent.py` | Deep Q-Network agent — NumPy MLP, experience replay, target network |
+| `train_dqn.py` | DQN training driver — 300 simulation episodes; writes the log, weights and learning curve |
+| `dqn_training_log.csv` | DQN per-episode training log (300 episodes, seed 42) |
 | `topology.py` | Mininet diamond topology (runs in the VM) |
 | `controller_q.py` | Ryu controller — fixed next-hop flows + agent action for h1→h2 |
 | `measure_utils.py` | Helpers for parsing iperf/ping measurements |
@@ -90,7 +136,7 @@ real Mininet testbed. No Deep Q-Learning was implemented.
 ## Quick start
 
 - **On Windows:** `py train_agent.py` (simulation training) ·
+  `py train_dqn.py` (Deep Q-Learning extension) ·
   `py plot_results.py` (graphs from `results.csv`)
 - **In the Mininet VM:** start the Ryu controller, then `sudo python3 topology.py`
   — see `SETUP_GUIDE.md` for the complete procedure.
-
