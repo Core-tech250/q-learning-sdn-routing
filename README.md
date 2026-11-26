@@ -117,13 +117,6 @@ network was also queried at the testbed's actual background rates
 (0 / 4.2 / 8.4 Mbps) and gives the same policy there. The live runs themselves
 are the remaining step; until they are recorded, the scope note above stands.
 
-## Method note (stated honestly)
-
-The Q-table was **trained in simulation** (90 episodes on Windows, on a model
-parameterised from the testbed and the measured baseline, after 2 pilot live
-episodes) and the learned policy was then **validated with 15 live runs** on the
-real Mininet testbed. The Deep Q-Learning extension was likewise trained in
-simulation only (300 episodes) and was not validated live.
 
 ## Files
 
